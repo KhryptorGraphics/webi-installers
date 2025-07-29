@@ -1,5 +1,20 @@
 'use strict';
 
+let Fetcher = require('../_common/fetcher.js');
+
+/**
+ * @typedef DistributableRaw
+ * @prop {String} name
+ * @prop {String} version
+ * @prop {Boolean} lts
+ * @prop {String} [channel]
+ * @prop {String} date
+ * @prop {String} os
+ * @prop {String} arch
+ * @prop {String} ext
+ * @prop {String} download
+ */
+
 let GitHubish = module.exports;
 
 /**
@@ -12,7 +27,7 @@ let GitHubish = module.exports;
  * @param {String} [opts.username]
  * @param {String} [opts.token]
  */
-GitHubish.getAllReleases = async function ({
+GitHubish.getDistributables = async function ({
   owner,
   repo,
   baseurl,
@@ -44,28 +59,21 @@ GitHubish.getAllReleases = async function ({
     });
   }
 
-  let resp = await fetch(url, opts);
-  if (!resp.ok) {
-    let headers = Array.from(resp.headers);
-    console.error('Bad Resp Headers:', headers);
-    let text = await resp.text();
-    console.error('Bad Resp Body:', text);
-    let msg = `failed to fetch releases from '${baseurl}' with user '${username}'`;
-    throw new Error(msg);
-  }
-
-  let respText = await resp.text();
-  let gHubResp;
+  let resp;
   try {
-    gHubResp = JSON.parse(respText);
+    resp = await Fetcher.fetch(url, opts);
   } catch (e) {
-    console.error('Bad Resp JSON:', respText);
-    console.error(e.message);
-    let msg = `failed to parse releases from '${baseurl}' with user '${username}'`;
-    throw new Error(msg);
+    /** @type {Error & { code: string, response: { status: number, body: string } }} */ //@ts-expect-error
+    let err = e;
+    if (err.code === 'E_FETCH_RELEASES') {
+      err.message = `failed to fetch '${baseurl}' (githubish, user '${username}) release data: ${err.response.status} ${err.response.body}`;
+    }
+    throw e;
   }
+  let gHubResp = JSON.parse(resp.body);
 
   let all = {
+    /** @type {Array<DistributableRaw>} */
     releases: [],
     // todo make this ':baseurl' + ':releasename'
     download: '',
@@ -74,13 +82,18 @@ GitHubish.getAllReleases = async function ({
   try {
     gHubResp.forEach(transformReleases);
   } catch (e) {
-    console.error(e.message);
+    /** @type {Error & { code: string, response: { status: number, body: string } }} */ //@ts-expect-error
+    let err = e;
+    console.error(err.message);
     console.error('Error Headers:', resp.headers);
     console.error('Error Body:', resp.body);
     let msg = `failed to transform releases from '${baseurl}' with user '${username}'`;
     throw new Error(msg);
   }
 
+  /**
+   * @param {any} release - TODO
+   */
   function transformReleases(release) {
     for (let asset of release['assets']) {
       let name = asset['name'];
@@ -114,7 +127,7 @@ GitHubish.getAllReleases = async function ({
 };
 
 if (module === require.main) {
-  GitHubish.getAllReleases({
+  GitHubish.getDistributables({
     owner: 'BurntSushi',
     repo: 'ripgrep',
     baseurl: 'https://api.github.com',

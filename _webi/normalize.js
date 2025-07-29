@@ -57,7 +57,7 @@ var archMap = {
   amd64:
     /(\b|_|amd|(dar)?win(dows)?|mac(os)?|linux|osx|x)64([_\-]?bit)?(\b|_)/i,
   //x86: /(86)(\b|_)/i,
-  x86: /(\b|_|amd|(dar)?win(dows)?|mac(os)?|linux|osx|x)(86|32)([_\-]?bit)(\b|_)/i,
+  x86: /(\b|_|amd|(dar)?win(dows)?|mac(os)?|linux|osx|x)(86|32|i?386)([_\-]?bit)?(\b|_)/i,
   ppc64le: /(\b|_)(ppc64le)/i,
   ppc64: /(\b|_)(ppc64)(\b|_)/i,
   s390x: /(\b|_)(s390x)/i,
@@ -211,7 +211,8 @@ function normalize(all) {
       // won't match:
       //   - v1.0beta
       //   - v1.0-beta1b
-      let isBetaRe = /(\b|_)(preview|rc|beta|alpha)(\d+)(\b|_)/;
+      let isBetaRe =
+        /(\b|_)(alpha|beta|dev|developer|prev|preview|rc)(\d+)(\b|_)/;
       let isBeta = isBetaRe.test(rel.name);
       if (isBeta) {
         rel.channel = 'beta';

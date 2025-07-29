@@ -7,22 +7,22 @@ let GitHubish = require('./githubish.js');
 /**
  * Lists GitHub Releases (w/ uploaded assets)
  *
- * @param {any} _request - deprecated
+ * @param {null} _ - deprecated
  * @param {String} owner
  * @param {String} repo
  * @param {String} [baseurl]
  * @param {String} [username]
  * @param {String} [token]
  */
-async function getAllReleases(
-  _request,
+module.exports = async function (
+  _,
   owner,
   repo,
   baseurl = 'https://api.github.com',
   username = process.env.GITHUB_USERNAME || '',
   token = process.env.GITHUB_TOKEN || '',
 ) {
-  let all = await GitHubish.getAllReleases({
+  let all = await GitHubish.getDistributables({
     owner,
     repo,
     baseurl,
@@ -30,12 +30,13 @@ async function getAllReleases(
     token,
   });
   return all;
-}
+};
 
-module.exports = getAllReleases;
+let GitHub = module.exports;
+GitHub.getDistributables = module.exports;
 
 if (module === require.main) {
-  getAllReleases(null, 'BurntSushi', 'ripgrep').then(function (all) {
+  GitHub.getDistributables(null, 'BurntSushi', 'ripgrep').then(function (all) {
     console.info(JSON.stringify(all, null, 2));
   });
 }

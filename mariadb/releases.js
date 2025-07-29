@@ -1,210 +1,181 @@
 'use strict';
 
-var brewReleases = require('../_common/brew.js');
+let Fetcher = require('../_common/fetcher.js');
 
-module.exports = function (request) {
-  // So many places to get (incomplete) release info...
-  //
-  // MariaDB official
-  // - https://downloads.mariadb.org/mariadb/+releases/
-  // - http://archive.mariadb.org/
-  // Brew
-  // - https://formulae.brew.sh/api/formula/mariadb@10.3.json
-  // - https://formulae.brew.sh/docs/api/
-  // - https://formulae.brew.sh/formula/mariadb@10.2#default
-  //
-  // Note: This could be very fragile due to using the html
-  // as an API. It's pretty rather than minified, but that
-  // doesn't guarantee that it's meant as a consumable API.
-  //
+let Releases = module.exports;
 
-  var promises = [mariaReleases(), brewReleases(request, 'mariadb')];
-  return Promise.all(promises).then(function (many) {
-    var versions = many[0];
-    var brews = many[1];
+let PRODUCT = `mariadb`;
+// `https://downloads.mariadb.org/rest-api/${PRODUCT}/${minor}/`
+// `https://downloads.mariadb.org/rest-api/mariadb/10.5/`
+// https://github.com/MariaDB/mariadb-documentation/issues/41
 
-    var all = { download: '', releases: [] };
+Releases.latest = async function () {
+  let packages = [];
+  let versionData = await getVersionIds();
+  for (let verData of versionData.major_releases) {
+    let isVersion = /^\d+[.]\d+$/.test(verData.release_id);
+    if (!isVersion) {
+      continue;
+    }
 
-    // linux x86
-    // linux x64
-    // windows x86
-    // windows x64
-    // (and mac, wedged-in from Homebrew)
-    versions.forEach(function (ver) {
-      all.releases.push({
-        version: ver.version,
-        lts: false,
-        channel: ver.channel,
-        date: ver.date,
-        os: 'linux',
-        arch: 'amd64',
-        download:
-          'http://archive.mariadb.org/mariadb-{{ v }}/bintar-linux-x86_64/mariadb-{{ v }}-linux-x86_64.tar.gz'.replace(
-            /{{ v }}/g,
-            ver.version,
-          ),
-      });
-      all.releases.push({
-        version: ver.version,
-        lts: false,
-        channel: ver.channel,
-        date: ver.date,
-        os: 'linux',
-        arch: 'amd64',
-        download:
-          'http://archive.mariadb.org/mariadb-{{ v }}/bintar-linux-x86/mariadb-{{ v }}-linux-x86.tar.gz'.replace(
-            /{{ v }}/g,
-            ver.version,
-          ),
-      });
-
-      // windows
-      all.releases.push({
-        version: ver.version,
-        lts: false,
-        channel: ver.channel,
-        date: ver.date,
-        os: 'windows',
-        arch: 'amd64',
-        download:
-          'http://archive.mariadb.org/mariadb-{{ v }}/winx64-packages/mariadb-{{ v }}-winx64.zip'.replace(
-            /{{ v }}/g,
-            ver.version,
-          ),
-      });
-      all.releases.push({
-        version: ver.version,
-        lts: false,
-        channel: ver.channel,
-        date: ver.date,
-        os: 'windows',
-        arch: 'x86',
-        download:
-          'http://archive.mariadb.org/mariadb-{{ v }}/win32-packages/mariadb-{{ v }}-win32.zip'.replace(
-            /{{ v }}/g,
-            ver.version,
-          ),
-      });
-
-      // Note: versions are sorted most-recent first.
-      // We just assume that the brew version is most recent stable
-      // ... but we can't really know for sure
-
-      // TODO
-      brews.some(function (brew, i) {
-        // 10.3 => ^10.2(\b|\.)
-        var reBrewVer = new RegExp(
-          '^' + brew.version.replace(/\./, '\\.') + '(\\b|\\.)',
-          'g',
-        );
-        if (!ver.version.match(reBrewVer)) {
-          return;
+    let releaseData = await getReleases(verData.release_id);
+    let versions = Object.keys(releaseData.releases);
+    for (let ver of versions) {
+      let relData = releaseData.releases[ver];
+      for (let fileData of relData.files) {
+        let packageData = pluckData(verData, relData, fileData);
+        if (!packageData) {
+          continue;
         }
-        all.releases.push({
-          version: ver.version,
-          lts: false,
-          channel: ver.channel,
-          date: ver.date,
-          os: 'macos',
-          arch: 'amd64',
-          download: brew.download.replace(/{{ v }}/g, ver.version),
-        });
-        brews.splice(i, 1); // remove
-        return true;
-      });
-    });
-
-    return all;
-  });
-
-  function mariaReleases() {
-    return request({
-      url: 'https://downloads.mariadb.org/mariadb/+releases/',
-      fail: true, // https://git.coolaj86.com/coolaj86/request.js/issues/2
-    })
-      .then(failOnBadStatus)
-      .then(function (resp) {
-        // fragile, but simple
-
-        // Make release info go from this:
-        var html = resp.body;
-        //
-        // <tr>
-        //   <td><a href="/mariadb/10.0.38/">10.0.38</a></td>
-        //   <td>2019-01-31</td>
-        //   <td>Stable</td>
-        // </tr>
-
-        // To this:
-        var reLine = /\s*(<(tr|td)[^>]*>)\s*/g;
-        //
-        // <tr><tr><td><a href="/mariadb/10.0.38/">10.0.38</a></td><td>2019-01-31</td><td>Stable</td>
-        // </tr><tr><td><a href="/mariadb/10.0.37/">10.0.37</a></td><td>2018-11-01</td><td>Stable</td>
-        // </tr><tr><td><a href="/mariadb/10.0.36/">10.0.36</a></td><td>2018-08-01</td><td>Stable</td>
-        //
-        // To this:
-        var reVer =
-          /<tr>.*mariadb\/(10[^\/]+)\/">.*(20\d\d-\d\d-\d\d)<\/td><td>(\w+)<\/td>/;
-        //
-        // { "version": "10.0.36", "date": "2018-08-01", "channel": "stable" }
-
-        return html
-          .replace(reLine, '$1')
-          .split(/\n/)
-          .map(function (line) {
-            var m = line.match(reVer);
-            if (!m) {
-              return;
-            }
-            return {
-              version: m[1],
-              channel: mapChannel(m[3].toLowerCase()),
-              date: m[2],
-            };
-          })
-          .filter(Boolean);
-      })
-      .catch(function (err) {
-        console.error('Error fetching (official) MariaDB versions');
-        console.error(err);
-        return [];
-      });
+        packages.push(packageData);
+      }
+    }
   }
+
+  let all = { releases: packages };
+  return all;
 };
 
-function mapChannel(ch) {
-  if ('alpha' === ch) {
-    return 'dev';
+/** @type {Object.<String?, String>} */
+let channelsMap = {
+  // 'Long Term Support': 'stable',
+  // 'Short Term Support': 'stable',
+  // 'Rolling': null,
+  Stable: 'stable',
+  RC: 'rc',
+  Alpha: 'preview',
+  null: 'preview',
+};
+
+/** @type {Object.<String, String>} */
+let cpusMap = {
+  x86_64: 'amd64',
+};
+
+/**
+ * @param {MajorRelease} verData
+ * @param {Release} relData
+ * @param {File} fileData
+ */
+function pluckData(verData, relData, fileData) {
+  let lts =
+    verData.release_status === 'Stable' &&
+    verData.release_support_type === 'Long Term Support';
+  let cpu = fileData.cpu || '';
+  cpu = cpu.trim();
+
+  let isNotBinary = !fileData.os || !cpu; // "Source" or some such
+  if (isNotBinary) {
+    return null;
   }
-  // stable,rc,beta
-  return ch;
+
+  let isDebug = /debug/.test(fileData.file_name);
+  if (isDebug) {
+    return null;
+  }
+
+  let pkgData = {
+    name: fileData.file_name,
+    version: relData.release_id,
+    lts: lts,
+    channel: channelsMap[verData.release_status],
+    date: relData.date_of_release,
+    os: fileData.os?.toLowerCase(),
+    arch: cpusMap[cpu] || cpu,
+    hash: fileData.checksum.sha256sum,
+    download: fileData.file_download_url,
+  };
+
+  return pkgData;
 }
 
-function failOnBadStatus(resp) {
-  if (resp.statusCode >= 400) {
-    var err = new Error('Non-successful status code: ' + resp.statusCode);
-    err.code = 'ESTATUS';
-    err.response = resp;
-    throw err;
-  }
-  return resp;
+/**
+ * @typedef {String} ISODate - YYYY-MM-DD (ISO 8601 format)
+ */
+
+/**
+ * @typedef MajorRelease
+ * @prop {String} release_id - version-like for stable versions, otherwise a title
+ * @prop {String} release_name - same as id for MariaDB
+ * @prop {String} release_status - Stable|RC|Alpha
+ * @prop {String?} release_support_type - Long Term Support|Short Term Support|Rolling|null
+ * @prop {ISODate?} release_eol_date
+ */
+
+/**
+ * @typedef MajorReleasesWrapper
+ * @prop {Array<MajorRelease>} major_releases
+ */
+
+/**
+ * @typedef Release
+ * @prop {String} release_id - "11.4.4" or "11.6.0 Vector"
+ * @prop {String} release_name - "MariaDB Server 11.8.0 Preview"
+ * @prop {ISODate} date_of_release
+ * @prop {String} release_notes_url
+ * @prop {String} change_log
+ * @prop {Array<File>} files - release assets (packages, docs, etc)
+ */
+
+/**
+ * @typedef ReleasesWrapper
+ * @prop {Object.<String, Release>} releases
+ */
+
+/**
+ * @typedef File
+ * @prop {Number} file_id
+ * @prop {String} file_name
+ * @prop {String?} package_type - "gzipped tar file" or "ZIP file"
+ * @prop {String?} os - "Linux" or "Windows"
+ * @prop {String?} cpu - "x86_64" (or null)
+ * @prop {Checksum} checksum
+ * @prop {String} file_download_url
+ * @prop {String?} signature
+ * @prop {String} checksum_url
+ * @prop {String} signature_url
+ */
+
+/**
+ * @typedef Checksum
+ * @prop {String?} md5sum
+ * @prop {String?} sha1sum
+ * @prop {String?} sha256sum
+ * @prop {String?} sha512sum
+ */
+
+/**
+ * @returns {Promise<MajorReleasesWrapper>}
+ */
+async function getVersionIds() {
+  let url = `https://downloads.mariadb.org/rest-api/${PRODUCT}/`;
+  let resp = await Fetcher.fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+
+  let result = JSON.parse(resp.body);
+  return result;
+}
+
+/**
+ * @param {String} verId
+ * @returns {Promise<ReleasesWrapper>}
+ */
+async function getReleases(verId) {
+  let url = `https://downloads.mariadb.org/rest-api/${PRODUCT}/${verId}`;
+  let resp = await Fetcher.fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+
+  let result = JSON.parse(resp.body);
+  return result;
 }
 
 if (module === require.main) {
-  module.exports(require('@root/request')).then(function (all) {
-    console.info('official releases look like:');
-    console.info(JSON.stringify(all.releases.slice(0, 2), null, 2));
-    console.info('Homebrew releases look like:');
-    console.info(
-      JSON.stringify(
-        all.releases
-          .filter(function (rel) {
-            return 'macos' === rel.os;
-          })
-          .slice(0, 2),
-        null,
-        2,
-      ),
-    );
+  Releases.latest().then(function (all) {
+    let normalize = require('../_webi/normalize.js');
+    all = normalize(all);
+    let json = JSON.stringify(all, null, 2);
+    console.info(json);
   });
 }

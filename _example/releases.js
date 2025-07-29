@@ -12,17 +12,26 @@ var repo = 'ripgrep';
 /**                                                                          **/
 /******************************************************************************/
 
-module.exports = function (request) {
-  return github(request, owner, repo).then(function (all) {
-    return all;
-  });
+let Releases = module.exports;
+
+Releases.latest = async function () {
+  let all = await github(null, owner, repo);
+  return all;
+};
+
+Releases.sample = async function () {
+  let normalize = require('../_webi/normalize.js');
+  let all = await Releases.latest();
+  all = normalize(all);
+  // just select the first 5 for demonstration
+  all.releases = all.releases.slice(0, 5);
+  return all;
 };
 
 if (module === require.main) {
-  module.exports(require('@root/request')).then(function (all) {
-    all = require('../_webi/normalize.js')(all);
-    // just select the first 5 for demonstration
-    all.releases = all.releases.slice(0, 5);
-    console.info(JSON.stringify(all, null, 2));
-  });
+  (async function () {
+    let samples = await Releases.sample();
+
+    console.info(JSON.stringify(samples, null, 2));
+  })();
 }

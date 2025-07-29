@@ -4,8 +4,8 @@ var github = require('../_common/github.js');
 var owner = 'oven-sh';
 var repo = 'bun';
 
-module.exports = function (request) {
-  return github(request, owner, repo).then(function (all) {
+module.exports = function () {
+  return github(null, owner, repo).then(function (all) {
     all.releases = all.releases
       .filter(function (r) {
         let isDebug = r.name.includes('-profile');
@@ -16,6 +16,14 @@ module.exports = function (request) {
         let isAncient = r.name.includes('-baseline');
         if (isAncient) {
           return false;
+        }
+
+        let isMusl = r.name.includes('-musl');
+        if (isMusl) {
+          r._musl = true;
+          r.libc = 'musl';
+        } else if (r.os === 'linux') {
+          r.libc = 'gnu';
         }
 
         return true;
@@ -30,7 +38,7 @@ module.exports = function (request) {
 };
 
 if (module === require.main) {
-  module.exports(require('@root/request')).then(function (all) {
+  module.exports().then(function (all) {
     all = require('../_webi/normalize.js')(all);
     // just select the first 5 for demonstration
     all.releases = all.releases.slice(0, 5);

@@ -70,17 +70,19 @@ InstallerServer.helper = async function ({
 
   console.log(`dbg: Get Project Installer Type for '${projectName}':`);
   let proj = await Builds.getProjectType(projectName);
-  console.log(proj);
+  if (proj.type === 'alias') {
+    console.log(`dbg: alias`, proj);
+    projectName = proj.detail;
+    proj = await Builds.getProjectType(projectName); // an alias should never resolve to an alias
+  }
+  console.log(`dbg: proj`, proj);
 
-  let validTypes = ['alias', 'selfhosted', 'valid'];
+  let validTypes = ['selfhosted', 'valid'];
   if (!validTypes.includes(proj.type)) {
     let msg = `'${projectName}' doesn't have an installer: '${proj.type}': '${proj.detail}'`;
     let err = new Error(msg);
     err.code = 'ENOENT';
     throw err;
-  }
-  if (proj.type === 'alias') {
-    projectName = proj.detail;
   }
 
   let tmplParams = {
@@ -120,8 +122,7 @@ InstallerServer.helper = async function ({
     name: projectName,
     date: new Date(),
   });
-  let latest = projInfo.versions[0];
-  Object.assign(tmplParams, { latest });
+  let latestVersions = Builds.enumerateLatestVersions(projInfo);
   //console.log('projInfo', projInfo);
 
   let buildTargetInfo = {
@@ -130,12 +131,27 @@ InstallerServer.helper = async function ({
     arches: projInfo.arches,
     libcs: projInfo.libcs,
     formats: projInfo.formats,
+    latest: latestVersions.latest,
+    stable: latestVersions.stable,
   };
 
+  // TODO .findMatchingPackages() should probably account for this
   let hasOs = projInfo.oses.includes(hostTarget.os);
+  let maybePosix = !hasOs && hostTarget.os !== 'windows';
+  if (maybePosix) {
+    let posixes = ['posix_2017', 'posix_2024'];
+    for (let posixYear of posixes) {
+      let hasPosix = projInfo.oses.includes(posixYear);
+      if (hasPosix) {
+        hasOs = true;
+        break;
+      }
+    }
+  }
   if (!hasOs) {
     hasOs = projInfo.oses.includes('ANYOS');
   }
+
   if (!hasOs) {
     let pkg1 = Object.assign(buildTargetInfo, errPackage);
     return [pkg1, tmplParams];

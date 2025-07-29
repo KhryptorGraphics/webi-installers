@@ -3,7 +3,6 @@
 var Releases = module.exports;
 
 var path = require('path');
-var request = require('@root/request');
 var _normalize = require('./normalize.js');
 
 var cache = {};
@@ -17,14 +16,18 @@ let installerDir = path.join(__dirname, '..');
 Releases.get = async function (pkgdir) {
   let get;
   try {
-    get = require(path.join(pkgdir, 'releases.js'));
+    get = require(`${pkgdir}/releases.js`);
+    // TODO update all releases files with module.exports.xxxx = 'foo';
+    if (!get.latest) {
+      get.latest = get;
+    }
   } catch (e) {
     let err = new Error('no releases.js for', pkgdir.split(/[\/\\]+/).pop());
     err.code = 'E_NO_RELEASE';
     throw err;
   }
 
-  let all = await get(request);
+  let all = await get.latest();
 
   return _normalize(all);
 };
